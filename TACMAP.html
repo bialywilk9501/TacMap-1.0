@@ -2401,6 +2401,7 @@ body.hud-no-labels .casevac-lbl { display:none !important; }
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
 
 <script>
 /* ════════ FIREBASE CONFIG ════════ */
@@ -3189,6 +3190,7 @@ function connectToRoom(code){
   listenForVoiceMessages(code);
   listenForPanic(code);
   listenForSitreps(code);
+  listenForNotifications(code);
   startPingDisplay();
   tryInitPush();
 }
@@ -6242,41 +6244,15 @@ renderChatMsg = function(d, isMine){
 };
 
 /* ════════════════════════════════════════
-   PUSH NOTIFICATIONS & BACKGROUND MODE
+   FCM PUSH NOTIFICATIONS
+   VAPID: BBGyqe2GshqVnGp5FQf4...
    ════════════════════════════════════════ */
-var swRegistration = null;
+var VAPID_KEY = 'BBGyqe2GshqVnGp5FQf4mGCkrM_-ACKP1LCF-35-RhQ8NxUPbhOQio_SB90xgY23efs8Ci30MbttcIhipIczEyA';
+var fcmMessaging = null;
+var fcmToken = null;
 var pushEnabled = false;
-
-/* ── Request notification permission + subscribe ── */
-async function initPushNotifications(){
-  if(!('Notification' in window)){
-    console.warn('Notifications not supported');
-    return false;
-  }
-  if(!('serviceWorker' in navigator)){
-    console.warn('Service Worker not supported');
-    return false;
-  }
-
-  var perm = Notification.permission;
-  if(perm === 'denied'){
-    notify('⛔ Powiadomienia zablokowane — odblokuj w ustawieniach przeglądarki');
-    return false;
-  }
-  if(perm !== 'granted'){
-    perm = await Notification.requestPermission();
-  }
-  if(perm === 'granted'){
-    pushEnabled = true;
-    try{
-      swRegistration = await navigator.serviceWorker.ready;
-    }catch(e){}
-    notify('🔔 Powiadomienia push włączone');
-    updatePushBtn();
-    return true;
-  }
-  return false;
-}
+var swRegistration = null;
+var _pushInitDone = false;
 
 function updatePushBtn(){
   var btn = document.getElementById('push-toggle-btn');
@@ -6286,82 +6262,177 @@ function updatePushBtn(){
   btn.textContent = pushEnabled ? '🔔' : '🔕';
 }
 
-/* ── Send push notification via SW message ── */
-function pushNotify(title, body, tag, urgent, url){
-  if(!pushEnabled) return;
-  // If app is in foreground — use in-app notify
-  if(document.visibilityState === 'visible'){
-    notify((urgent?'🆘 ':'')+(title ? title+': ' : '')+body);
-    return;
+async function initPushNotifications(){
+  if(!('Notification' in window) || !('serviceWorker' in navigator)){
+    notify('⚠️ Powiadomienia niedostępne w tej przeglądarce');
+    return false;
   }
-  // App is in background — use SW notification
-  if(swRegistration && swRegistration.active){
-    swRegistration.active.postMessage({
-      type:'PUSH_NOTIFY',
-      title: title||'TACMAP',
-      body: body||'',
-      tag: tag||'tacmap',
-      urgent: urgent||false,
-      url: url||'./'
-    });
-  } else {
-    // Fallback: direct Notification API
-    try{
-      new Notification(title||'TACMAP', {
-        body: body, icon:'./icon-192.png', tag:tag||'tacmap',
-        requireInteraction: urgent||false
+  if(Notification.permission === 'denied'){
+    notify('⛔ Powiadomienia zablokowane — odblokuj w ustawieniach Chrome');
+    return false;
+  }
+
+  // Request permission
+  var perm = Notification.permission;
+  if(perm !== 'granted'){
+    perm = await Notification.requestPermission();
+  }
+  if(perm !== 'granted'){
+    notify('🔕 Odmówiono uprawnień do powiadomień');
+    return false;
+  }
+
+  try{
+    // Register FCM service worker
+    var swReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js', {scope:'./'});
+    swRegistration = swReg;
+    await navigator.serviceWorker.ready;
+
+    // Init FCM messaging
+    if(typeof firebase !== 'undefined' && firebase.messaging){
+      fcmMessaging = firebase.messaging();
+
+      // Get FCM token
+      fcmToken = await fcmMessaging.getToken({
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: swReg
       });
-    }catch(e){}
+
+      if(fcmToken){
+        console.log('FCM Token:', fcmToken.slice(0,20)+'...');
+        // Store token in Firebase so other devices can send to us
+        if(currentRoom && firebaseReady && myPeerId){
+          fbDb.ref('rooms/'+currentRoom+'/fcmTokens/'+myPeerId).set({
+            token: fcmToken,
+            callsign: profile.callsign,
+            ts: Date.now()
+          });
+        }
+        pushEnabled = true;
+        updatePushBtn();
+        notify('🔔 Powiadomienia push włączone!');
+
+        // Listen for foreground messages
+        fcmMessaging.onMessage(function(payload){
+          var data = payload.data || {};
+          var title = data.title || (payload.notification && payload.notification.title) || 'TACMAP';
+          var body  = data.body  || (payload.notification && payload.notification.body)  || '';
+          notify((data.urgent==='true'?'🆘 ':'')+title+': '+body);
+          // Also show system notification even in foreground for urgent
+          if(data.urgent === 'true' && swRegistration){
+            swRegistration.showNotification(title, {
+              body:body, icon:'./icon-192.png', tag:data.tag||'tacmap',
+              requireInteraction:true, vibrate:[500,200,500,200,500]
+            });
+          }
+        });
+        return true;
+      }
+    }
+  } catch(e){
+    console.error('FCM init error:', e);
+    // Fallback to basic Notification API
+    pushEnabled = true;
+    updatePushBtn();
+    notify('🔔 Powiadomienia podstawowe włączone');
   }
+  return false;
 }
 
-/* ── Toggle push from button ── */
 function togglePushNotifications(){
   if(pushEnabled){
     pushEnabled = false;
+    fcmToken = null;
     updatePushBtn();
+    // Remove token from Firebase
+    if(currentRoom && firebaseReady && myPeerId){
+      fbDb.ref('rooms/'+currentRoom+'/fcmTokens/'+myPeerId).remove();
+    }
     notify('🔕 Powiadomienia push wyłączone');
   } else {
     initPushNotifications();
   }
 }
 
-/* ── Listen for SW notification clicks ── */
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.addEventListener('message', function(e){
-    if(e.data && e.data.type==='notification-click'){
-      // Handle deep link
-      if(e.data.url && e.data.url.includes('sos')) switchTab('map');
-      else if(e.data.url && e.data.url.includes('chat')) toggleChat();
-      else if(e.data.url && e.data.url.includes('sitrep')) switchTab('sitrep');
+/* ── Send push to self + store for others ── */
+function pushNotify(title, body, tag, urgent, url){
+  // Always notify in-app
+  notify((urgent?'🆘 ':'')+title+': '+body);
+
+  if(!pushEnabled) return;
+
+  // App in background → SW notification
+  if(document.visibilityState !== 'visible' || urgent){
+    if(swRegistration && swRegistration.active){
+      swRegistration.active.postMessage({
+        type:'PUSH_NOTIFY',
+        title: title,
+        body: body,
+        tag: tag||'tacmap',
+        urgent: urgent||false,
+        url: url||'./'
+      });
+    } else {
+      try{
+        new Notification(title, {
+          body:body, icon:'./icon-192.png', tag:tag||'tacmap',
+          requireInteraction:urgent||false
+        });
+      }catch(e){}
+    }
+  }
+
+  // Store notification in Firebase so other peers get it
+  // (for true cross-device push we'd need a server — this handles in-app)
+  if(currentRoom && firebaseReady && tag === 'sos'){
+    fbDb.ref('rooms/'+currentRoom+'/notifications').push({
+      title:title, body:body, tag:tag,
+      urgent:urgent||false, ts:Date.now()
+    });
+  }
+}
+
+/* ── Listen for notifications from other peers (in-app) ── */
+function listenForNotifications(code){
+  if(!firebaseReady) return;
+  fbDb.ref('rooms/'+code+'/notifications').limitToLast(1).on('child_added', function(snap){
+    var d = snap.val();
+    if(!d || Date.now()-d.ts > 10000) return; // ignore old
+    if(swRegistration){
+      swRegistration.showNotification(d.title||'TACMAP', {
+        body: d.body||'',
+        icon: './icon-192.png',
+        tag: d.tag||'tacmap',
+        requireInteraction: d.urgent||false,
+        vibrate: d.urgent ? [500,200,500,200,500] : [200,100,200]
+      });
     }
   });
 }
 
-/* ── Visibility change — re-acquire wake lock ── */
-document.addEventListener('visibilitychange', function(){
-  if(document.visibilityState==='visible'){
-    // Reconnect Firebase if needed
-    if(currentRoom && firebaseReady && !fbDb.ref('.info/connected')){
-      notify('📡 Przywracanie połączenia...');
-    }
-  }
-});
-
-/* ── Auto-request permission on room join ── */
-var _pushInitDone = false;
+/* ── Auto-init on room join ── */
 function tryInitPush(){
   if(_pushInitDone) return;
   _pushInitDone = true;
+  // Store FCM token for room
+  if(fcmToken && currentRoom && firebaseReady){
+    fbDb.ref('rooms/'+currentRoom+'/fcmTokens/'+myPeerId).set({
+      token:fcmToken, callsign:profile.callsign, ts:Date.now()
+    });
+  }
   if(Notification.permission === 'granted'){
-    pushEnabled = true;
-    navigator.serviceWorker.ready.then(function(reg){ swRegistration = reg; }).catch(function(){});
-    updatePushBtn();
+    initPushNotifications();
   } else if(Notification.permission !== 'denied'){
-    // Auto-prompt after 2s delay
-    setTimeout(initPushNotifications, 2000);
+    setTimeout(initPushNotifications, 3000);
   }
 }
+
+/* ── Visibility change ── */
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='visible'){
+    if(typeof wakeLockActive!=='undefined' && wakeLockActive) requestWakeLock();
+  }
+});
 
 /* ════════ MODALS HELPERS ════════ */
 function closeModal(id){document.getElementById(id).classList.remove('open')}
@@ -6377,6 +6448,7 @@ function notify(msg){var el=document.getElementById('notif');el.textContent=msg;
 <script>
 if('serviceWorker' in navigator){
   window.addEventListener('load', function(){
+    navigator.serviceWorker.register('./firebase-messaging-sw.js').catch(function(e){console.warn('FCM SW:',e);});
     navigator.serviceWorker.register('./service-worker.js').then(function(reg){
       console.log('TACMAP SW registered:', reg.scope);
     }).catch(function(e){ console.warn('SW registration failed:', e); });
