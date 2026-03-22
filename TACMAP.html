@@ -1289,6 +1289,16 @@ body.hud-no-labels .casevac-lbl { display:none !important; }
   font-family:'IBM Plex Mono',monospace;text-align:center;
   margin-top:4px;
 }
+
+/* ── PUSH NOTIFICATION BUTTON ── */
+#push-toggle-btn{
+  width:34px;height:34px;border-radius:var(--r);
+  border:1px solid var(--b1);background:transparent;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  color:var(--t3);transition:all .15s;flex-shrink:0;font-size:14px;
+}
+#push-toggle-btn:hover{background:var(--s2);color:var(--t1)}
+#push-toggle-btn.active{color:var(--acc);border-color:rgba(99,102,241,.4);background:rgba(99,102,241,.1)}
 </style>
 </head>
 <body>
@@ -1391,6 +1401,7 @@ body.hud-no-labels .casevac-lbl { display:none !important; }
       <svg id="fs-icon-enter" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M16 21h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
       <svg id="fs-icon-exit" viewBox="0 0 24 24" style="display:none"><path d="M8 3v3a2 2 0 01-2 2H3M21 8h-3a2 2 0 01-2-2V3M3 16h3a2 2 0 012 2v3M16 21v-3a2 2 0 012-2h3"/></svg>
     </button>
+    <button id="push-toggle-btn" onclick="togglePushNotifications()" title="Włącz powiadomienia push">🔕</button>
     <button id="wakelock-btn" onclick="toggleWakeLock()" title="Zapobiegaj wygaszaniu ekranu">☀️</button>
     <button id="theme-toggle" onclick="toggleTheme()" title="Motyw">🌙</button>
     <div id="op-badge" onclick="openOpModal()">
@@ -3179,6 +3190,7 @@ function connectToRoom(code){
   listenForPanic(code);
   listenForSitreps(code);
   startPingDisplay();
+  tryInitPush();
 }
 
 function broadcastPosition(){
@@ -4902,6 +4914,7 @@ function listenForVoiceMessages(code){
     if(d.from!==myPeerId){
       document.getElementById('vm-badge').style.display='inline';
       notify('🎙 '+d.callsign+': wiadomość głosowa ('+d.duration+'s)');
+    pushNotify('🎙 Wiadomość głosowa', d.callsign+' nagrał wiadomość ('+d.duration+'s)', 'voice', false, './?tab=voice');
     }
   });
 }
@@ -5525,7 +5538,9 @@ function listenForPanic(code){
     if(Date.now()-d.ts>60000) return; // ignore old
     // Alert the user
     if(navigator.vibrate) navigator.vibrate([500,200,500,200,500]);
-    notify('🆘 SOS OD '+d.callsign+'! Poz: '+d.lat.toFixed(4)+'° N, '+d.lng.toFixed(4)+'° E');
+    var sosMsg = '🆘 SOS OD '+d.callsign+'! Poz: '+d.lat.toFixed(4)+'° N, '+d.lng.toFixed(4)+'° E';
+    notify(sosMsg);
+    pushNotify('🆘 ALARM SOS — '+d.callsign, 'Poz: '+d.lat.toFixed(4)+'°N, '+d.lng.toFixed(4)+'°E — WYMAGANA POMOC!', 'sos', true, './?tab=sos');
     // Place marker on map
     var sosIcon = L.divIcon({className:'',html:'<div style="background:#ef4444;color:#fff;font-weight:900;font-size:11px;padding:4px 7px;border-radius:6px;border:2px solid #fff;box-shadow:0 2px 12px rgba(239,68,68,.8);white-space:nowrap">🆘 '+escapeHtml(d.callsign)+'</div>',iconSize:[80,28],iconAnchor:[40,28]});
     L.marker([d.lat,d.lng],{icon:sosIcon,zIndexOffset:2000}).addTo(map).bindPopup('<b>🆘 SOS · '+escapeHtml(d.callsign)+'</b><br>'+d.lat.toFixed(5)+'° N, '+d.lng.toFixed(5)+'° E<br><small>'+new Date(d.ts).toLocaleTimeString('pl-PL')+'</small>');
@@ -5811,6 +5826,7 @@ function listenForSitreps(code){
     sentSitreps.unshift(d);
     renderSitreps();
     notify('📋 SITREP od '+d.callsign+' · '+d.status);
+    pushNotify('📋 SITREP — '+d.callsign, 'Status: '+d.status+' · Kontakt: '+(d.contact||'—'), 'sitrep', d.status==='RED', './?tab=sitrep');
   });
 }
 
@@ -6224,6 +6240,128 @@ renderChatMsg = function(d, isMine){
     }
   }
 };
+
+/* ════════════════════════════════════════
+   PUSH NOTIFICATIONS & BACKGROUND MODE
+   ════════════════════════════════════════ */
+var swRegistration = null;
+var pushEnabled = false;
+
+/* ── Request notification permission + subscribe ── */
+async function initPushNotifications(){
+  if(!('Notification' in window)){
+    console.warn('Notifications not supported');
+    return false;
+  }
+  if(!('serviceWorker' in navigator)){
+    console.warn('Service Worker not supported');
+    return false;
+  }
+
+  var perm = Notification.permission;
+  if(perm === 'denied'){
+    notify('⛔ Powiadomienia zablokowane — odblokuj w ustawieniach przeglądarki');
+    return false;
+  }
+  if(perm !== 'granted'){
+    perm = await Notification.requestPermission();
+  }
+  if(perm === 'granted'){
+    pushEnabled = true;
+    try{
+      swRegistration = await navigator.serviceWorker.ready;
+    }catch(e){}
+    notify('🔔 Powiadomienia push włączone');
+    updatePushBtn();
+    return true;
+  }
+  return false;
+}
+
+function updatePushBtn(){
+  var btn = document.getElementById('push-toggle-btn');
+  if(!btn) return;
+  btn.classList.toggle('active', pushEnabled);
+  btn.title = pushEnabled ? 'Powiadomienia włączone — kliknij aby wyłączyć' : 'Włącz powiadomienia push';
+  btn.textContent = pushEnabled ? '🔔' : '🔕';
+}
+
+/* ── Send push notification via SW message ── */
+function pushNotify(title, body, tag, urgent, url){
+  if(!pushEnabled) return;
+  // If app is in foreground — use in-app notify
+  if(document.visibilityState === 'visible'){
+    notify((urgent?'🆘 ':'')+(title ? title+': ' : '')+body);
+    return;
+  }
+  // App is in background — use SW notification
+  if(swRegistration && swRegistration.active){
+    swRegistration.active.postMessage({
+      type:'PUSH_NOTIFY',
+      title: title||'TACMAP',
+      body: body||'',
+      tag: tag||'tacmap',
+      urgent: urgent||false,
+      url: url||'./'
+    });
+  } else {
+    // Fallback: direct Notification API
+    try{
+      new Notification(title||'TACMAP', {
+        body: body, icon:'./icon-192.png', tag:tag||'tacmap',
+        requireInteraction: urgent||false
+      });
+    }catch(e){}
+  }
+}
+
+/* ── Toggle push from button ── */
+function togglePushNotifications(){
+  if(pushEnabled){
+    pushEnabled = false;
+    updatePushBtn();
+    notify('🔕 Powiadomienia push wyłączone');
+  } else {
+    initPushNotifications();
+  }
+}
+
+/* ── Listen for SW notification clicks ── */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message', function(e){
+    if(e.data && e.data.type==='notification-click'){
+      // Handle deep link
+      if(e.data.url && e.data.url.includes('sos')) switchTab('map');
+      else if(e.data.url && e.data.url.includes('chat')) toggleChat();
+      else if(e.data.url && e.data.url.includes('sitrep')) switchTab('sitrep');
+    }
+  });
+}
+
+/* ── Visibility change — re-acquire wake lock ── */
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='visible'){
+    // Reconnect Firebase if needed
+    if(currentRoom && firebaseReady && !fbDb.ref('.info/connected')){
+      notify('📡 Przywracanie połączenia...');
+    }
+  }
+});
+
+/* ── Auto-request permission on room join ── */
+var _pushInitDone = false;
+function tryInitPush(){
+  if(_pushInitDone) return;
+  _pushInitDone = true;
+  if(Notification.permission === 'granted'){
+    pushEnabled = true;
+    navigator.serviceWorker.ready.then(function(reg){ swRegistration = reg; }).catch(function(){});
+    updatePushBtn();
+  } else if(Notification.permission !== 'denied'){
+    // Auto-prompt after 2s delay
+    setTimeout(initPushNotifications, 2000);
+  }
+}
 
 /* ════════ MODALS HELPERS ════════ */
 function closeModal(id){document.getElementById(id).classList.remove('open')}
