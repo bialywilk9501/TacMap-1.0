@@ -1206,13 +1206,14 @@ body.hud-no-labels .casevac-lbl { display:none !important; }
   padding:20px 24px 36px;
   background:linear-gradient(transparent,rgba(0,0,0,.85));
   display:flex;align-items:center;justify-content:space-between;
-  gap:12px;
+  gap:12px;z-index:9996;
 }
 #video-top-bar{
   position:absolute;top:0;left:0;right:0;
   padding:16px 20px;
   background:linear-gradient(rgba(0,0,0,.7),transparent);
   display:flex;align-items:center;justify-content:space-between;
+  z-index:9996;
 }
 .vid-close-btn{
   width:40px;height:40px;border-radius:50%;
@@ -1258,9 +1259,9 @@ body.hud-no-labels .casevac-lbl { display:none !important; }
   opacity:0;pointer-events:none;transition:opacity .1s;
 }
 #vid-recordings-panel{
-  position:absolute;top:0;left:0;right:0;bottom:0;
-  background:rgba(0,0,0,.95);display:none;flex-direction:column;
-  overflow-y:auto;padding:20px;
+  position:fixed;top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,.97);display:none;flex-direction:column;
+  overflow-y:auto;padding:20px;z-index:9999;
 }
 #vid-recordings-panel.open{display:flex}
 .vid-rec-item{
@@ -5986,13 +5987,16 @@ function closeVideoRecorder(){
   if(vidRecording) stopVideoRecording();
   stopCamera();
   document.getElementById('video-recorder').classList.remove('open');
+  document.getElementById('vid-recordings-panel').classList.remove('open');
 }
 
 function startCamera(){
   stopCamera();
+  // Use lower resolution to keep file sizes manageable
   var constraints = {
-    video:{facingMode:vidFacingMode, width:{ideal:1280}, height:{ideal:720}},
-    audio:true
+    video:{facingMode:vidFacingMode, width:{ideal:640}, height:{ideal:480},
+           frameRate:{ideal:24,max:30}},
+    audio:{echoCancellation:true, noiseSuppression:true}
   };
   navigator.mediaDevices.getUserMedia(constraints).then(function(stream){
     vidStream = stream;
@@ -6032,14 +6036,25 @@ function startVideoRecording(){
   vidChunks = [];
   vidSeconds = 0;
 
-  var mimeTypes = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4',''];
+  // Pick most compressed format available
+  var mimeTypes = [
+    'video/mp4;codecs=h264,aac',  // best compression
+    'video/webm;codecs=vp9,opus', // good compression
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4',
+    ''
+  ];
   var chosenMime = '';
   for(var i=0;i<mimeTypes.length;i++){
     if(mimeTypes[i]===''||MediaRecorder.isTypeSupported(mimeTypes[i])){
       chosenMime=mimeTypes[i]; break;
     }
   }
-  var opts = chosenMime ? {mimeType:chosenMime} : {};
+  // Set bitrate to keep files small (~500kbps video + 64kbps audio)
+  var opts = chosenMime
+    ? {mimeType:chosenMime, videoBitsPerSecond:500000, audioBitsPerSecond:64000}
+    : {videoBitsPerSecond:500000, audioBitsPerSecond:64000};
 
   vidMediaRecorder = new MediaRecorder(vidStream, opts);
   vidMediaRecorder.ondataavailable = function(e){
@@ -6073,7 +6088,7 @@ function startVideoRecording(){
     var s = (vidSeconds%60).toString().padStart(2,'0');
     document.getElementById('vid-timer').textContent = '⏺ '+m+':'+s;
     // Auto-stop at 3 min to avoid huge files
-    if(vidSeconds >= 180) stopVideoRecording();
+    if(vidSeconds >= 60) stopVideoRecording(); // 60s max for reasonable file size
   }, 1000);
 
   // Keep screen on
@@ -6114,12 +6129,13 @@ function sendLastVideoToChat(){
 function sendVideoToChat(rec){
   if(!currentRoom||!firebaseReady){ notify('Dołącz do pokoju aby wysłać wideo'); return; }
   // Convert to base64 — warn if too large
-  var maxSize = 1.5 * 1024 * 1024; // 1.5MB base64 limit
+  // Firebase node limit ~10MB, base64 adds ~33% overhead
+  var maxSize = 3 * 1024 * 1024; // 3MB blob = ~4MB base64 — safe for Firebase
   if(rec.blob.size > maxSize){
-    notify('Wideo za duże ('+formatVidSize(rec.blob.size)+') — max ~1MB. Nagraj krótszy klip.');
+    notify('Wideo za duże ('+formatVidSize(rec.blob.size)+') — max 3MB. Nagraj klip do ~15s.');
     return;
   }
-  notify('⏳ Wysyłanie wideo...');
+  notify('⏳ Wysyłanie '+formatVidSize(rec.blob.size)+'...');
   var reader = new FileReader();
   reader.onload = function(ev){
     var b64 = ev.target.result;
