@@ -23,12 +23,12 @@ messaging.onBackgroundMessage(function(payload) {
   var notifBody  = data.body  || payload.notification?.body  || 'Nowe zdarzenie';
   var tag        = data.tag   || 'tacmap';
   var urgent     = data.urgent === 'true';
-  var url        = data.url   || '/TacMap/';
+  var url        = data.url   || '/TacMap-1.0/';
 
   return self.registration.showNotification(notifTitle, {
     body: notifBody,
-    icon: '/TacMap/icon-192.png',
-    badge: '/TacMap/icon-192.png',
+    icon: '/TacMap-1.0/icon-192.png',
+    badge: '/TacMap-1.0/icon-192.png',
     tag: tag,
     renotify: true,
     requireInteraction: urgent,
@@ -40,7 +40,7 @@ messaging.onBackgroundMessage(function(payload) {
 // Notification click handler
 self.addEventListener('notificationclick', function(e) {
   e.notification.close();
-  var url = (e.notification.data && e.notification.data.url) || '/TacMap/';
+  var url = (e.notification.data && e.notification.data.url) || '/TacMap-1.0/';
   e.waitUntil(
     clients.matchAll({type:'window',includeUncontrolled:true}).then(function(list) {
       for(var i=0;i<list.length;i++){

@@ -1,0 +1,29 @@
+{
+  "name": "TACMAP — Tactical Map System",
+  "short_name": "TACMAP",
+  "description": "Taktyczna mapa operacyjna z synchronizacją w czasie rzeczywistym",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1117",
+  "theme_color": "#0e1117",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": [
+    "navigation",
+    "utilities"
+  ],
+  "lang": "pl"
+}
