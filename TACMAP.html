@@ -466,7 +466,7 @@ html,body{height:100%;overflow:hidden;touch-action:none}
 
 /* ── DIRECTION CONE (SVG overlay on operator marker) ── */
 .op-cone-wrap{position:relative;display:flex;flex-direction:column;align-items:center}
-.op-cone-svg{position:absolute;top:50%;left:50%;transform:translate(-50%,-68%) rotate(0deg);pointer-events:none;transition:transform .5s cubic-bezier(.25,.46,.45,.94);z-index:1}
+.op-cone-svg{pointer-events:none;transition:transform .5s cubic-bezier(.25,.46,.45,.94)}
 
 @media(max-width:700px){
   #chat-panel{bottom:108px;width:min(380px,94vw);max-height:50vh}
@@ -2752,23 +2752,57 @@ function makeOpIcon(p, hdg){
   var coneOffsetDeg = (hudConfig && hudConfig.coneOffset) ? hudConfig.coneOffset : 0;
   var finalHdg = coneHdg + coneOffsetDeg;
   var halfRad = (coneAngleDeg/2) * Math.PI/180;
-  var r = 28; var cx = 30; var cy = 30;
-  // Cone points downward (forward direction in screen space before rotation)
-  var x1 = Math.round(cx + r*Math.sin(-halfRad));
-  var y1 = Math.round(cy + r);
-  var x2 = Math.round(cx + r*Math.sin(halfRad));
-  var y2 = Math.round(cy + r);
-  // Use a simpler fan shape: two lines from center + arc
+  // Layout: single SVG containing both cone and marker circle
+  // Apex of cone = center of marker circle = iconAnchor point
+  // Total canvas: 80w x 120h
+  // Marker center (iconAnchor) at (40, 80) — center of canvas horizontally, 2/3 down
+  // Cone extends UPWARD from apex: length 70px
+  // Marker circle: radius 17px centered at (40,80)
+  // Label: below marker
+
+  var W = 80, H = 120;
+  var ax = 40, ay = 80;   // apex = anchor = marker center
+  var coneLen = 68;        // how far cone extends from apex
+  var mR = 17;             // marker circle radius
   var largeArc = coneAngleDeg > 180 ? 1 : 0;
   var gid = 'cg'+Math.floor(Math.random()*99999);
-  var coneSVG='<svg class="op-cone-svg" width="60" height="60" viewBox="0 0 60 60" style="'+coneVisible+'transform:translate(-50%,-68%) rotate('+finalHdg+'deg)">'
-    +'<defs><radialGradient id="'+gid+'" cx="50%" cy="0%" r="100%">'
+
+  // Cone tip at (ax, ay), opening upward (toward -y)
+  // At angle 0° (north): cone points up → correct
+  // End points of cone arc (before rotation)
+  var ex1x = ax + coneLen * Math.sin(-halfRad);
+  var ex1y = ay - coneLen * Math.cos(halfRad);
+  var ex2x = ax + coneLen * Math.sin( halfRad);
+  var ex2y = ay - coneLen * Math.cos(halfRad);
+
+  // SVG rotates around the apex (ax, ay) by finalHdg degrees
+  var svgStyle = coneVisible
+    + 'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;'
+    + 'transform-origin:'+ax+'px '+ay+'px;'
+    + 'transform:rotate('+finalHdg+'deg);';
+
+  var coneSVG = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" style="'+svgStyle+'">'
+    +'<defs><radialGradient id="'+gid+'" cx="'+ax/W*100+'%" cy="'+ay/H*100+'%" r="70%">'
     +'<stop offset="0%" stop-color="'+coneColor+'" stop-opacity="'+coneOp+'"/>'
     +'<stop offset="100%" stop-color="'+coneColor+'" stop-opacity="0"/>'
     +'</radialGradient></defs>'
-    +'<path d="M'+cx+' '+cy+' L'+x1+' '+y1+' A'+r+' '+r+' 0 '+largeArc+' 1 '+x2+' '+y2+' Z" fill="url(#'+gid+')" stroke="'+coneColor+'" stroke-width="0.8" stroke-opacity="0.7"/>'
+    +'<path d="M'+ax+' '+ay+' L'+ex1x.toFixed(1)+' '+ex1y.toFixed(1)
+      +' A'+coneLen+' '+coneLen+' 0 '+largeArc+' 1 '+ex2x.toFixed(1)+' '+ex2y.toFixed(1)+' Z"'
+    +' fill="url(#'+gid+')" stroke="'+coneColor+'" stroke-width="1" stroke-opacity="0.8"/>'
     +'</svg>';
-  return L.divIcon({className:'',html:'<div class="op-cone-wrap op-mwrap">'+coneSVG+'<div style="'+mShapeCSS(p.markerStyle||'circle',bg)+'">'+inner+'</div><div class="op-mlabel">'+p.callsign+'</div></div>',iconSize:[60,70],iconAnchor:[30,70]});
+
+  // Marker circle + label (not rotated — always upright)
+  var markerHTML = '<div style="position:absolute;top:'+(ay-mR)+'px;left:'+(ax-mR)+'px;width:'+(mR*2)+'px;height:'+(mR*2)+'px;'
+    + mShapeCSS(p.markerStyle||'circle', bg, mR*2)
+    + 'z-index:3;">'+inner+'</div>';
+
+  var labelHTML = '<div class="op-mlabel" style="position:absolute;top:'+(ay+mR+3)+'px;left:50%;transform:translateX(-50%);z-index:3;white-space:nowrap;">'+p.callsign+'</div>';
+
+  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;">'
+    + coneSVG + markerHTML + labelHTML + '</div>';
+
+  // iconAnchor = apex = marker center = (ax, ay)
+  return L.divIcon({className:'', html:html, iconSize:[W, H], iconAnchor:[ax, ay]});
 }
 function makeOpPopup(p,lat,lng,acc){
   return '<div style="padding:4px 2px"><div style="font-weight:600;font-size:13px;margin-bottom:5px">'+p.icon+' '+p.callsign+'</div><div style="font-size:11px;line-height:1.9;color:var(--t2)">Rola: '+p.roleLabel+'<br>'+lat.toFixed(5)+'° N, '+lng.toFixed(5)+'° E'+(acc>0?'<br>Dok.: ±'+acc+'m':'')+'</div></div>';
@@ -3128,9 +3162,10 @@ function connectToRoom(code){
   notify('Łączenie z pokojem '+code+'…');
 
   var roomRef=fbDb.ref('rooms/'+code);
-  var myRef=roomRef.child('peers/'+myPeerId);
+  window._myPeerRef=roomRef.child('peers/'+myPeerId);
+  var myRef=window._myPeerRef;
 
-  // Write my presence
+  // Write my presence with heartbeat
   myRef.set({
     callsign:profile.callsign,
     icon:profile.icon,
@@ -3138,17 +3173,28 @@ function connectToRoom(code){
     markerStyle:profile.markerStyle||'circle',
     lat:myLat||null,
     lng:myLng||null,
-    ts:Date.now()
+    ts:Date.now(),
+    hb:Date.now()  // heartbeat timestamp
   });
+  // Remove on disconnect (Firebase server-side cleanup)
   myRef.onDisconnect().remove();
 
   // Listen for all peers
   roomRef.child('peers').on('value',function(snap){
     var data=snap.val()||{};
     connectedPeers={};
+    var now=Date.now();
     Object.keys(data).forEach(function(pid){
       if(pid===myPeerId)return;
-      connectedPeers[pid]=data[pid];
+      var peer=data[pid];
+      // Filter stale peers — no heartbeat in 20 seconds
+      var hb = peer.hb || peer.ts || 0;
+      if(now - hb > 20000){
+        // Remove stale peer from Firebase
+        fbDb.ref('rooms/'+currentRoom+'/peers/'+pid).remove();
+        return;
+      }
+      connectedPeers[pid]=peer;
     });
     updatePeerMarkers();
     updateSyncUI();
@@ -3182,6 +3228,14 @@ function connectToRoom(code){
   if(syncInterval)clearInterval(syncInterval);
   syncInterval=setInterval(broadcastPosition,5000);
   broadcastPosition();
+
+  // Heartbeat every 8s — keeps presence alive
+  if(window._hbInterval) clearInterval(window._hbInterval);
+  window._hbInterval = setInterval(function(){
+    if(currentRoom && firebaseReady && window._myPeerRef){
+      window._myPeerRef.update({hb: Date.now()});
+    }
+  }, 8000);
 
   document.getElementById('btn-disconnect').style.display='';
   document.getElementById('sync-code-display').textContent=code;
@@ -3266,6 +3320,7 @@ function setSyncState(state){
 }
 
 function disconnectSync(){
+  if(window._hbInterval){ clearInterval(window._hbInterval); window._hbInterval=null; }
   if(currentRoom&&firebaseReady){
     fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId).remove();
     fbDb.ref('rooms/'+currentRoom+'/peers').off();
@@ -6427,10 +6482,39 @@ function tryInitPush(){
   }
 }
 
-/* ── Visibility change ── */
+/* ── Visibility change + cleanup on close ── */
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState==='visible'){
     if(typeof wakeLockActive!=='undefined' && wakeLockActive) requestWakeLock();
+    // Update heartbeat immediately when returning
+    if(currentRoom && firebaseReady && myPeerId){
+      fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId+'/hb').set(Date.now());
+    }
+  } else {
+    // Page hidden — update heartbeat to signal we're still alive briefly
+    if(currentRoom && firebaseReady && myPeerId){
+      fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId+'/hb').set(Date.now());
+    }
+  }
+});
+
+// Remove peer immediately when tab/app closes
+window.addEventListener('beforeunload', function(){
+  if(currentRoom && firebaseReady && myPeerId){
+    // Cancel the onDisconnect (we'll remove manually)
+    try{
+      fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId).onDisconnect().cancel();
+      fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId).remove();
+    }catch(e){}
+  }
+});
+
+// Also handle pagehide (mobile browsers use this instead of beforeunload)
+window.addEventListener('pagehide', function(){
+  if(currentRoom && firebaseReady && myPeerId){
+    try{
+      fbDb.ref('rooms/'+currentRoom+'/peers/'+myPeerId).remove();
+    }catch(e){}
   }
 });
 
